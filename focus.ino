@@ -1,46 +1,72 @@
-#include <Stepper.h>
-                    
-volatile boolean turnDetected;  // need volatile for Interrupts
-volatile boolean rotationDirection;  // CW or CCW rotation
+#include <Arduino.h>
+#include "A4988.h"
+//#include <BasicStepperDriver.h>
+//#include <MultiDriver.h>
+//#include <SyncDriver.h>
+
+// using a 200-step motor (most common)
+//for a nano on a CNC v4 board modified
+ #define MOTOR_STEPS 200
+ #define RPM 10
+ 
+ //microsteppig pins
+ #define MS1 12
+ #define MS2 11
+ #define MS3 10
+ 
+ //movement pins
+ #define DIR 4
+ #define STEP 7
+ 
+#define ENABLE 8 // optional (just delete ENABLE from everywhere if not used)
+//#define SLEEP 13 // optional (just delete SLEEP from everywhere if not used)
+ A4988 stepper(MOTOR_STEPS, DIR, STEP, ENABLE, MS1, MS2, MS3);
+ //A4988 stepper(MOTOR_STEPS, DIR, STEP, SLEEP, MS1, MS2, MS3);
+
 
 // Rotary Encoder Module connections
-const int pinSW  = 2;    // Reading Push Button switch
-const int pinCLK = 3;    // Generating interrupts using CLK signal
-const int pinDT  = 4;    // Reading DT signal
+const int PinSW  = 3;    // Reading Push Button switch
+const int PinCLK = 2;    // Generating interrupts using CLK signal
+const int PinDT  = 5;    // Reading DT signal
 
 //LED & shift register description
-const int latchPin = 5;  // Pin connected to Pin 12 of 74HC595 (Latch)
-const int dataPin  = 6;  // Pin connected to Pin 14 of 74HC595 (Data)
-const int clockPin = 7;  // Pin connected to Pin 11 of 74HC595 (Clock)
+const int latchPin = 9;  // Pin connected to Pin 12 of 74HC595 (Latch)
+const int dataPin  = 13;  // Pin connected to Pin 14 of 74HC595 (Data)
+const int clockPin = 6;  // Pin connected to Pin 11 of 74HC595 (Clock)
 const char common = 'a';    // common anode  or use const char common = 'c';    // common cathode
 volatile byte bits;
 
-//stepper motor/driver decription
-int in1Pin = 10;
-int in2Pin = 11;
-int in3Pin = 12;
-int in4Pin = 13;
-volatile int motorSteps = 9;
-volatile int motorDirection = 1;
-Stepper focusMotor(200, in1Pin, in2Pin, in3Pin, in4Pin);  
+int motorSteps = 5;
+int motorDirection = 1;  // CW or CCW rotation
+
+// Variables to debounce Rotary Encoder
+long TimeOfLastDebounce = 0;
+int DelayofDebounce = 0.01;
+int DelayofHold = 10000;  // miliseconds to hold motor on after a move 10 sec = 10000
+
+// Store previous Pins state
+int PreviousCLK;   
+int PreviousDATA;
+
 
 void setup()
 {
     //stepper
-    pinMode(in1Pin, OUTPUT);
-    pinMode(in2Pin, OUTPUT);
-    pinMode(in3Pin, OUTPUT);
-    pinMode(in4Pin, OUTPUT);
+  stepper.begin(RPM);
+    // if using enable/disable on ENABLE pin (active LOW) instead of SLEEP uncomment next line
+    stepper.setEnableActiveState(LOW);
+    stepper.enable();
+
+
+Serial.begin(9600);  //diag
 
     //encoder
-    pinMode(pinCLK,INPUT);  // Trips when the encoder moves
-    //digitalWrite(pinCLK, HIGH);
-    attachInterrupt (1,rotaryDetect,CHANGE); // interrupt 1 always connected to pin 3 on Arduino UNO
-    pinMode(pinDT,INPUT);   //  Tells the direction the encoder moved.
-    //digitalWrite(pinDT, HIGH);
-    pinMode(pinSW,INPUT);   // Encoder push button clicked
-    //digitalWrite(pinSW, HIGH);
-    attachInterrupt (0,pushButton,FALLING); // interrupt 0 always connected to pin 2 on Arduino UNO
+  // Put current pins state in variables
+  PreviousCLK=digitalRead(PinCLK);
+  PreviousDATA=digitalRead(PinDT);
+
+  // Set the Switch pin to use Arduino PULLUP resistors
+  pinMode(PinSW, INPUT_PULLUP);
 
     //LED & shift register
     pinMode(latchPin,OUTPUT);
@@ -49,68 +75,144 @@ void setup()
 
     //LED
     bits = convertToBits(motorSteps) ;
-    bits = bits | B00000001;  // add decimal point
-    updateLED(bits);    // display alphanumeric digit
+    //bits = bits | B00000001;  // add decimal point
+    updateLED(bits);    // display alphanumeric digit  
+    //
+    digitalWrite(ENABLE, HIGH);  //shut of motor holding. if on at this point.
+}
 
 
+
+void loop ()  {
+
+  // If enough time has passed check the rotary encoder
+  if ((millis() - TimeOfLastDebounce) > DelayofDebounce) {
+    
+    check_rotary();  // Rotary Encoder check routine below
+    
+    PreviousCLK=digitalRead(PinCLK);
+    PreviousDATA=digitalRead(PinDT);
+    
+    TimeOfLastDebounce=millis();  // Set variable to current millis() timer
+    //delay(250); 
+  }
+
+  //after 10 seconds release motor hold
+  if (digitalRead(ENABLE) == LOW)  {
+    if ((millis() - TimeOfLastDebounce) > DelayofHold) {
+
+    //Serial.println("10 sec mark"); //prints 
+    //Serial.println(motorSteps); //prints 
+    
+      //turn off DP 
+      // generate characters to display for hexidecimal numbers 0 to F
+      //displays the same number on the LED, just removes the decimal point as a unlocked motor indicator
+      bits = convertToBits(motorSteps) ;
+      bits = bits ^ B00000001;  // change decimal point
+      updateLED(bits);    // display alphanumeric digit  
+      digitalWrite(ENABLE, HIGH);  //shut of motor holding.
+     }
+   } 
+   
+   
+  // Check if Rotary Encoder switch was pressed
+  if (digitalRead(PinSW) == LOW) {
+    motorSteps --;  
+    if (motorSteps < 1) {
+      motorSteps = 5; // Reset counter to 9
+    }
+    //LED
+    bits = convertToBits(motorSteps) ;
+    //bits = bits | B00000001;  // add decimal point
+    updateLED(bits);    // display alphanumeric digit  
+    
+    Serial.println("button"); //prints 
+    Serial.println(motorSteps); //prints 
+    delay(200);
+  }
     
 }
 
-// Interrupt routine runs if CLK goes from HIGH to LOW (encoder turns)
-//set a flag for main loops to turn the stepper
-void rotaryDetect ()  {
-    delay(4);  // delay for Debouncing
-    if (digitalRead(pinCLK))
-      rotationDirection = digitalRead(pinDT);
-    else
-    rotationDirection = !digitalRead(pinDT);
-    turnDetected = true;
-}
+//void MotorMove(int motorSteps, int motorDirection)  {
+void MotorMove()  {
+      /*
+     * Microstepping mode: 1, 2, 4, 8, 16 or 32 (where supported by driver)
+     * Mode 1 is full speed.
+     * Mode 32 is 32 microsteps per step.
+     * The motor should rotate just as fast (at the set RPM),
+     * but movement precision is increased, which may become visually apparent at lower RPMs.
+     */
+    // In 1:8 microstepping mode, one revolution takes 8 times as many microsteps
+    //stepper.setMicrostep(8);   // Set microstep mode to 1:8
+    //stepper.move(8 * MOTOR_STEPS);    // forward revolution
+    //stepper.move(-8 * MOTOR_STEPS);   // reverse revolution
 
-//Interrupt routine runs if SW goes from HIGH to LOW (encoder push button)
-//subtract 1 from stepper speed
-//turn off motor holding
-//display spped on LED
-void pushButton(){
-    //lower speed or roll over to top speed if at minimum
-    motorSteps--; 
-    if (motorSteps == 0) {
-        motorSteps = 9;
-    }
-    // output speed to LED
-    bits = convertToBits(motorSteps) ;
-    updateLED(bits);    // display alphanumeric digit
-
-    //release motor holding - kill power
-    digitalWrite(in1Pin,LOW);
-    digitalWrite(in2Pin,LOW);
-    digitalWrite(in3Pin,LOW);
-    digitalWrite(in4Pin,LOW);
-}
-
-void loop ()  {
-// Runs if rotation was detected
-  if (turnDetected)  {
-      turnDetected = false;  // do NOT repeat IF loop until new rotation detected
-
-      // generate characters to display for hexidecimal numbers 0 to F
+    Serial.println("move sub"); //prints 
+    Serial.println(motorSteps); //prints 
+    Serial.println(motorDirection); //prints 
+ 
+    if (digitalRead(ENABLE) == HIGH)  {
+      digitalWrite(ENABLE, LOW); //turn on motor coils
+      
+       //  motor hold
       //displays the same number on the LED, just adds the decimal point as a locked motor indicator
       bits = convertToBits(motorSteps) ;
-       bits = bits | B00000001;  // add decimal point
-       updateLED(bits);    // display alphanumeric digit        
+      bits = bits | B00000001;  // add decimal point
+      updateLED(bits);    // display alphanumeric digit  
+       
+    } 
 
-       // Which direction to move Stepper motor
-       if (rotationDirection) { // Move motor CCW
-          motorDirection = 1;
-       } else {
-              motorDirection = -1;
-          }
-       //move stepper
-       focusMotor.setSpeed(100);   
-       focusMotor.step(motorSteps * motorDirection);
-       //delay(200);  
-      }      
-}
+   
+  switch (motorSteps) {
+    case 1:
+      // H H H 1/16 step
+    stepper.setMicrostep(16);   // Set microstep mode to 1:16
+    stepper.move(motorDirection);    
+      break;
+    case 2:
+      // H H L 1/8 step
+    stepper.setMicrostep(8);   // Set microstep mode to 1:8
+    stepper.move(motorDirection);    
+      break;
+    case 3:
+      // L H L 1/4 step
+    stepper.setMicrostep(4);   // Set microstep mode to 1:4
+    stepper.move(motorDirection);    
+      break;
+    case 4:
+      // H L L 1/2 step
+    stepper.setMicrostep(2);   // Set microstep mode to 1:2
+    stepper.move(motorDirection);    
+      break;
+    case 5:
+      // L L L full step
+    stepper.setMicrostep(1);   // Set microstep mode to 1:1
+    stepper.move(motorDirection);    
+      break;
+    case 6:
+      // 2 step
+    stepper.setMicrostep(1);   // Set microstep mode to 2:1
+    stepper.move(motorDirection*2);    
+      break;
+    case 7:
+      // 3 step
+    stepper.setMicrostep(1);   // Set microstep mode to 3:1
+    stepper.move(motorDirection*3);    
+      break;
+    case 8:
+      // 4 step
+    stepper.setMicrostep(1);   // Set microstep mode to 4:1
+    stepper.move(motorDirection*4);    
+      break;
+    case 9:
+      // 5 step
+    stepper.setMicrostep(1);   // Set microstep mode to 5:1
+    stepper.move(motorDirection*5);    
+      break;
+             
+      }
+} 
+
 
 void updateLED(byte eightBits) {
   
@@ -177,3 +279,53 @@ byte convertToBits(int someNumber) {
       break;   
   }
 }
+
+
+// Check if Rotary Encoder was moved
+void check_rotary() {
+ 
+ if ((PreviousCLK == 0) && (PreviousDATA == 1)) {
+    if ((digitalRead(PinCLK) == 1) && (digitalRead(PinDT) == 0)) {
+      motorDirection = 1;
+      MotorMove();
+    }
+    if ((digitalRead(PinCLK) == 1) && (digitalRead(PinDT) == 1)) {
+      motorDirection = -1;
+      MotorMove();
+    }
+  }
+
+if ((PreviousCLK == 1) && (PreviousDATA == 0)) {
+    if ((digitalRead(PinCLK) == 0) && (digitalRead(PinDT) == 1)) {
+      motorDirection = 1;
+      MotorMove();
+    }
+    if ((digitalRead(PinCLK) == 0) && (digitalRead(PinDT) == 0)) {
+      motorDirection = -1;
+      MotorMove();
+    }
+  }
+
+if ((PreviousCLK == 1) && (PreviousDATA == 1)) {
+    if ((digitalRead(PinCLK) == 0) && (digitalRead(PinDT) == 1)) {
+      motorDirection = 1;
+      MotorMove();
+    }
+    if ((digitalRead(PinCLK) == 0) && (digitalRead(PinDT) == 0)) {
+      motorDirection = -1;
+      MotorMove();
+    }
+  }  
+
+if ((PreviousCLK == 0) && (PreviousDATA == 0)) {
+    if ((digitalRead(PinCLK) == 1) && (digitalRead(PinDT) == 0)) {
+      motorDirection = 1;
+      MotorMove();
+    }
+    if ((digitalRead(PinCLK) == 1) && (digitalRead(PinDT) == 1)) {
+      motorDirection = -1;
+      MotorMove();
+    }
+  }     
+       
+ }
