@@ -1,8 +1,5 @@
 #include <Arduino.h>
 #include "A4988.h"
-//#include <BasicStepperDriver.h>
-//#include <MultiDriver.h>
-//#include <SyncDriver.h>
 
 // using a 200-step motor (most common)
 //for a nano on a CNC v4 board modified
@@ -42,6 +39,9 @@ int motorDirection = 1;  // CW or CCW rotation
 // Variables to debounce Rotary Encoder
 long TimeOfLastDebounce = 0;
 int DelayofDebounce = 0.01;
+
+//vars to turn off hold coils
+long LastMoveTime;
 int DelayofHold = 10000;  // miliseconds to hold motor on after a move 10 sec = 10000
 
 // Store previous Pins state
@@ -56,9 +56,6 @@ void setup()
     // if using enable/disable on ENABLE pin (active LOW) instead of SLEEP uncomment next line
     stepper.setEnableActiveState(LOW);
     stepper.enable();
-
-
-Serial.begin(9600);  //diag
 
     //encoder
   // Put current pins state in variables
@@ -81,8 +78,6 @@ Serial.begin(9600);  //diag
     digitalWrite(ENABLE, HIGH);  //shut of motor holding. if on at this point.
 }
 
-
-
 void loop ()  {
 
   // If enough time has passed check the rotary encoder
@@ -94,21 +89,18 @@ void loop ()  {
     PreviousDATA=digitalRead(PinDT);
     
     TimeOfLastDebounce=millis();  // Set variable to current millis() timer
-    //delay(250); 
+
   }
 
   //after 10 seconds release motor hold
   if (digitalRead(ENABLE) == LOW)  {
-    if ((millis() - TimeOfLastDebounce) > DelayofHold) {
+      // If enough time has passed check the rotary encoder
+    if ((millis() - LastMoveTime) > DelayofHold) {
 
-    //Serial.println("10 sec mark"); //prints 
-    //Serial.println(motorSteps); //prints 
-    
       //turn off DP 
       // generate characters to display for hexidecimal numbers 0 to F
       //displays the same number on the LED, just removes the decimal point as a unlocked motor indicator
       bits = convertToBits(motorSteps) ;
-      bits = bits ^ B00000001;  // change decimal point
       updateLED(bits);    // display alphanumeric digit  
       digitalWrite(ENABLE, HIGH);  //shut of motor holding.
      }
@@ -118,6 +110,9 @@ void loop ()  {
   // Check if Rotary Encoder switch was pressed
   if (digitalRead(PinSW) == LOW) {
     motorSteps --;  
+    
+    digitalWrite(ENABLE, HIGH);  //shut of motor holding.
+    
     if (motorSteps < 1) {
       motorSteps = 5; // Reset counter to 9
     }
@@ -126,9 +121,9 @@ void loop ()  {
     //bits = bits | B00000001;  // add decimal point
     updateLED(bits);    // display alphanumeric digit  
     
-    Serial.println("button"); //prints 
-    Serial.println(motorSteps); //prints 
-    delay(200);
+    //Serial.println("button"); //prints 
+    //Serial.println(motorSteps); //prints 
+    delay(300);
   }
     
 }
@@ -146,22 +141,17 @@ void MotorMove()  {
     //stepper.setMicrostep(8);   // Set microstep mode to 1:8
     //stepper.move(8 * MOTOR_STEPS);    // forward revolution
     //stepper.move(-8 * MOTOR_STEPS);   // reverse revolution
-
-    Serial.println("move sub"); //prints 
-    Serial.println(motorSteps); //prints 
-    Serial.println(motorDirection); //prints 
  
     if (digitalRead(ENABLE) == HIGH)  {
       digitalWrite(ENABLE, LOW); //turn on motor coils
-      
+
+    LastMoveTime = millis();
        //  motor hold
       //displays the same number on the LED, just adds the decimal point as a locked motor indicator
       bits = convertToBits(motorSteps) ;
       bits = bits | B00000001;  // add decimal point
-      updateLED(bits);    // display alphanumeric digit  
-       
+      updateLED(bits);    // display alphanumeric digit        
     } 
-
    
   switch (motorSteps) {
     case 1:
@@ -212,7 +202,6 @@ void MotorMove()  {
              
       }
 } 
-
 
 void updateLED(byte eightBits) {
   
@@ -279,7 +268,6 @@ byte convertToBits(int someNumber) {
       break;   
   }
 }
-
 
 // Check if Rotary Encoder was moved
 void check_rotary() {
