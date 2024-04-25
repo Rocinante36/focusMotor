@@ -1,3 +1,9 @@
+//Code by Rocinante
+//Jeffrey Osiel
+// contact rocinante_1@hotmail.com
+// https://www.youtube.com/watch?v=n-8QGkv3ibM
+//  youtube link to working prototype.
+
 #include <Arduino.h>
 #include "A4988.h"
 
